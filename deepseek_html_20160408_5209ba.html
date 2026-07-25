@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <title>🦕 小恐龙跳跳跳 (Chrome Dino)</title>
+    <style>
+        /* 让页面变暗，模拟谷歌浏览器的质感 */
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #2a2a2a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', monospace;
+        }
+        .game-wrapper {
+            background: #f7f7f7;
+            padding: 20px 30px 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border: 2px solid #333;
+            background: #ffffff;
+            cursor: pointer;
+        }
+        #info {
+            margin-top: 12px;
+            color: #555;
+            font-size: 18px;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+        #info span {
+            color: #e74c3c;
+        }
+        .hint {
+            color: #999;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+    <!-- 游戏画布：宽600，高250 -->
+    <canvas id="gameCanvas" width="600" height="250"></canvas>
+    <div id="info">🏆 得分：<span id="scoreDisplay">0</span></div>
+    <div class="hint">按 空格键 / ↑ / W 跳跃 | 撞到仙人掌游戏结束</div>
+</div>
+
+<script>
+    // ---------- 1. 获取画布和绘图上下文 ----------
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreSpan = document.getElementById('scoreDisplay');
+
+    // ---------- 2. 游戏核心参数 ----------
+    const GROUND_Y = 210;        // 地面高度（像素位置）
+    const GRAVITY = 0.6;         // 重力加速度（每帧下落速度增加）
+    const JUMP_FORCE = -12;      // 跳跃初速度（负值代表向上）
+
+    // ---------- 3. 游戏状态变量 ----------
+    let gameOver = false;
+    let score = 0;
+    let frame = 0;              // 帧计数器，用于控制障碍物生成间隔
+
+    // ---------- 4. 创建小恐龙对象 ----------
+    const dino = {
+        x: 50,                  // 固定水平位置
+        y: GROUND_Y - 30,       // 站在地面（恐龙高度30px）
+        width: 30,
+        height: 30,
+        vy: 0,                  // 垂直速度 (Vertical Velocity)
+        isJumping: false,
+        // 绘制恐龙（画一个可爱的像素风小恐龙）
+        draw() {
+            ctx.fillStyle = '#4a4a4a';
+            // 身体（圆角矩形）
+            ctx.beginPath();
+            ctx.roundRect(this.x, this.y, this.width, this.height, 5);
+            ctx.fill();
+            // 眼睛（白色底+黑眼珠）
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(this.x + 20, this.y + 8, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(this.x + 22, this.y + 7, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            // 背上的小棘刺（恐龙特色）
+            ctx.fillStyle = '#4a4a4a';
+            ctx.beginPath();
+            ctx.moveTo(this.x + 5, this.y);
+            ctx.lineTo(this.x + 10, this.y - 10);
+            ctx.lineTo(this.x + 15, this.y);
+            ctx.fill();
+        }
+    };
+
+    // ---------- 5. 障碍物管理（仙人掌） ----------
+    let obstacles = [];
+
+    // 创建仙人掌（大小随机）
+    function spawnObstacle() {
+        const height = 20 + Math.random() * 30; // 20~50 随机高度
+        obstacles.push({
+            x: 600,
+            y: GROUND_Y - height,
+            width: 12 + Math.random() * 10,     // 宽度随机
+            height: height,
+            speed: 6,                           // 向左移动速度
+        });
+    }
+
+    // 绘制仙人掌
+    function drawObstacle(obs) {
+        ctx.fillStyle = '#2e7d32';   // 深绿色
+        // 主体
+        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+        // 小刺（左边凸起）
+        ctx.fillRect(obs.x - 4, obs.y + 5, 4, 6);
+        ctx.fillRect(obs.x - 3, obs.y + 15, 3, 6);
+        // 右边凸起
+        ctx.fillRect(obs.x + obs.width, obs.y + 8, 4, 8);
+    }
+
+    // ---------- 6. 碰撞检测（矩形重叠检测） ----------
+    function checkCollision(dino, obs) {
+        // 只要任何一个矩形没有重叠，就返回 false
+        return !(dino.x + dino.width < obs.x ||          // 恐龙在障碍物左边
+                 dino.x > obs.x + obs.width ||          // 恐龙在障碍物右边
+                 dino.y + dino.height < obs.y ||        // 恐龙在障碍物上面
+                 dino.y > obs.y + obs.height);          // 恐龙在障碍物下面
+    }
+
+    // ---------- 7. 重置游戏 ----------
+    function resetGame() {
+        gameOver = false;
+        score = 0;
+        frame = 0;
+        obstacles = [];
+        dino.y = GROUND_Y - dino.height;
+        dino.vy = 0;
+        dino.isJumping = false;
+        scoreSpan.textContent = '0';
+    }
+
+    // ---------- 8. 键盘与点击事件绑定 ----------
+    function handleJump(e) {
+        // 阻止空格键滚动页面、阻止方向键滚动
+        if (e.key === ' ' || e.key === 'Space' || e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+            e.preventDefault();
+            
+            // 如果游戏结束，按跳跃键相当于重新开始
+            if (gameOver) {
+                resetGame();
+                return;
+            }
+
+            // 只有在地面上才能起跳（防止二段跳）
+            if (!dino.isJumping) {
+                dino.vy = JUMP_FORCE;
+                dino.isJumping = true;
+            }
+        }
+    }
+
+    // 点击 canvas 也能跳跃（手机和鼠标党友好）
+    canvas.addEventListener('click', () => {
+        if (gameOver) {
+            resetGame();
+            return;
+        }
+        if (!dino.isJumping) {
+            dino.vy = JUMP_FORCE;
+            dino.isJumping = true;
+        }
+    });
+
+    // 监听键盘事件
+    document.addEventListener('keydown', handleJump);
+
+    // 注意：如果 roundRect 在某些浏览器不支持，手动补一个简单的 polyfill (这里用 Canvas 自带 API)
+    // 如果浏览器不支持 roundRect，我们用 fillRect 代替，但 Chrome 都支持，为了安全加个判断
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+        CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+            if (r > w/2) r = w/2;
+            if (r > h/2) r = h/2;
+            this.moveTo(x + r, y);
+            this.lineTo(x + w - r, y);
+            this.quadraticCurveTo(x + w, y, x + w, y + r);
+            this.lineTo(x + w, y + h - r);
+            this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            this.lineTo(x + r, y + h);
+            this.quadraticCurveTo(x, y + h, x, y + h - r);
+            this.lineTo(x, y + r);
+            this.quadraticCurveTo(x, y, x + r, y);
+            this.closePath();
+            return this;
+        };
+    }
+
+    // ---------- 9. 核心游戏循环（每帧更新） ----------
+    function gameLoop() {
+        // --- 如果游戏结束，冻结画面并显示“游戏结束” ---
+        if (gameOver) {
+            ctx.clearRect(0, 0, 600, 250);
+            // 画地面
+            ctx.fillStyle = '#dcdcdc';
+            ctx.fillRect(0, GROUND_Y, 600, 40);
+            // 显示 Game Over
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 32px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('💀 GAME OVER', 300, 120);
+            ctx.fillStyle = '#555';
+            ctx.font = '16px Arial';
+            ctx.fillText('按 空格键 / ↑ 重新开始', 300, 170);
+            
+            // 仍然画上恐龙（展示死亡位置）
+            dino.draw();
+            requestAnimationFrame(gameLoop);
+            return;
+        }
+
+        // --- 1. 清空画布 ---
+        ctx.clearRect(0, 0, 600, 250);
+
+        // --- 2. 物理更新：重力作用在恐龙上 ---
+        dino.vy += GRAVITY;          // 速度受重力影响
+        dino.y += dino.vy;           // 位置移动
+
+        // 落地检测（防止掉到地底下）
+        if (dino.y >= GROUND_Y - dino.height) {
+            dino.y = GROUND_Y - dino.height;
+            dino.vy = 0;
+            dino.isJumping = false;
+        }
+
+        // --- 3. 障碍物生成（每 80~120 帧生成一个，越来越快） ---
+        frame++;
+        // 动态生成速度：分数越高，生成间隔越小（难度上升）
+        let spawnRate = Math.max(40, 100 - Math.floor(score / 10));
+        if (frame % spawnRate === 0) {
+            spawnObstacle();
+        }
+
+        // --- 4. 障碍物移动与删除 ---
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obs = obstacles[i];
+            obs.x -= obs.speed;    // 向左移动
+
+            // 碰撞检测（如果还没游戏结束）
+            if (!gameOver && checkCollision(dino, obs)) {
+                gameOver = true;
+            }
+
+            // 如果障碍物完全移出左侧屏幕，删除并加分
+            if (obs.x + obs.width < 0) {
+                obstacles.splice(i, 1);
+                // 安全通过一个障碍物，得分 +10
+                if (!gameOver) {
+                    score += 10;
+                    scoreSpan.textContent = score;
+                }
+            }
+        }
+
+        // --- 5. 绘制所有元素 (按图层顺序) ---
+
+        // 绘制地面（灰色条 + 小线条纹理）
+        ctx.fillStyle = '#dcdcdc';
+        ctx.fillRect(0, GROUND_Y, 600, 40);
+        // 画路面小虚线（增加动感）
+        ctx.strokeStyle = '#bbbbbb';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([20, 25]);
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND_Y + 20);
+        ctx.lineTo(600, GROUND_Y + 20);
+        ctx.stroke();
+        ctx.setLineDash([]); // 重置虚线，避免影响其他绘制
+
+        // 绘制所有仙人掌
+        for (let obs of obstacles) {
+            drawObstacle(obs);
+        }
+
+        // 绘制小恐龙（画在最上面）
+        dino.draw();
+
+        // --- 6. 显示当前得分在画布左上角（更加直观） ---
+        ctx.fillStyle = '#333';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`🏃 ${score}`, 10, 30);
+
+        // --- 7. 下一帧 ---
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ---------- 10. 启动游戏 ----------
+    resetGame();      // 初始化状态
+    gameLoop();       // 开始无限循环
+</script>
+</body>
+</html>
