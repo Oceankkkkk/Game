@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <title>🐾 宝可梦 · 冒险征程</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            background: #1a2a3a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            user-select: none;
+        }
+        .game-wrapper {
+            background: #2c3e50;
+            padding: 20px 25px 25px;
+            border-radius: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.7);
+            border: 2px solid #4a627a;
+        }
+        canvas {
+            display: block;
+            border-radius: 20px;
+            background: #7ec8e3;
+            cursor: default;
+            box-shadow: inset 0 0 30px rgba(0,0,0,0.2);
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 14px;
+            color: #d0dce8;
+            font-weight: 600;
+            padding: 0 6px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .controls .keys {
+            background: #1e2d3d;
+            padding: 6px 18px;
+            border-radius: 30px;
+            font-size: 14px;
+            border: 1px solid #3a4f64;
+        }
+        .controls .team-info {
+            background: #1e2d3d;
+            padding: 4px 16px;
+            border-radius: 30px;
+            font-size: 14px;
+            border: 1px solid #3a4f64;
+            color: #f1c40f;
+        }
+        button {
+            background: #e67e22;
+            border: none;
+            color: white;
+            font-size: 16px;
+            padding: 8px 28px;
+            border-radius: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
+            box-shadow: 0 4px 0 #b85e0a;
+        }
+        button:hover { background: #d35400; transform: translateY(-2px); box-shadow: 0 6px 0 #a04000; }
+        button:active { transform: translateY(4px); box-shadow: 0 2px 0 #a04000; }
+    </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+    <canvas id="gameCanvas" width="800" height="620"></canvas>
+    <div class="controls">
+        <span class="keys">⬆⬇⬅➡ 移动 &nbsp;·&nbsp; 草丛遇敌</span>
+        <span class="team-info" id="teamDisplay">🐾 0 / 3</span>
+        <button id="resetBtn">🔄 重新开始</button>
+    </div>
+</div>
+
+<script>
+    // ============================================================
+    //  1. 画布 & 上下文
+    // ============================================================
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = 800, H = 620;
+    const teamDisplay = document.getElementById('teamDisplay');
+
+    // ============================================================
+    //  2. 全局状态
+    // ============================================================
+    let gameState = 'overworld';  // 'overworld' | 'battle' | 'dialogue' | 'gameover'
+    let keys = { up: false, down: false, left: false, right: false };
+    let frameCount = 0;
+    let encounterTimer = 0;
+    let battleLog = [];
+    let dialogueQueue = [];
+    let isDialogueActive = false;
+    let dialogueCallback = null;
+
+    // ============================================================
+    //  3. 属性克制表（宝可梦经典克制关系）
+    // ============================================================
+    const TYPE_CHART = {
+        '火':   { '草': 2, '冰': 2, '虫': 2, '钢': 0.5, '火': 0.5, '水': 0.5, '岩石': 0.5 },
+        '水':   { '火': 2, '地面': 2, '岩石': 2, '水': 0.5, '草': 0.5, '龙': 0.5 },
+        '草':   { '水': 2, '地面': 2, '岩石': 2, '火': 0.5, '草': 0.5, '毒': 0.5, '飞行': 0.5, '虫': 0.5, '龙': 0.5, '钢': 0.5 },
+        '电':   { '水': 2, '飞行': 2, '地面': 0, '草': 0.5, '电': 0.5, '龙': 0.5 },
+        '冰':   { '草': 2, '地面': 2, '飞行': 2, '龙': 2, '火': 0.5, '水': 0.5, '冰': 0.5, '钢': 0.5 },
+        '格斗': { '一般': 2, '冰': 2, '岩石': 2, '恶': 2, '钢': 2, '毒': 0.5, '飞行': 0.5, '超能': 0.5, '虫': 0.5, '幽灵': 0 },
+        '毒':   { '草': 2, '妖精': 2, '毒': 0.5, '地面': 0.5, '岩石': 0.5, '幽灵': 0.5, '钢': 0 },
+        '地面': { '火': 2, '电': 2, '毒': 2, '岩石': 2, '钢': 2, '草': 0.5, '虫': 0.5, '飞行': 0 },
+        '飞行': { '草': 2, '格斗': 2, '虫': 2, '电': 0.5, '岩石': 0.5, '钢': 0.5 },
+        '超能': { '格斗': 2, '毒': 2, '超能': 0.5, '钢': 0.5, '恶': 0 },
+        '虫':   { '草': 2, '超能': 2, '恶': 2, '火': 0.5, '格斗': 0.5, '毒': 0.5, '飞行': 0.5, '幽灵': 0.5, '钢': 0.5, '妖精': 0.5 },
+        '岩石': { '火': 2, '冰': 2, '飞行': 2, '虫': 2, '格斗': 0.5, '地面': 0.5, '钢': 0.5 },
+        '幽灵': { '超能': 2, '幽灵': 2, '一般': 0, '恶': 0.5 },
+        '龙':   { '龙': 2, '钢': 0.5, '妖精': 0 },
+        '恶':   { '超能': 2, '幽灵': 2, '格斗': 0.5, '恶': 0.5, '妖精': 0.5 },
+        '钢':   { '冰': 2, '岩石': 2, '妖精': 2, '火': 0.5, '水': 0.5, '电': 0.5, '钢': 0.5 },
+        '妖精': { '格斗': 2, '龙': 2, '恶': 2, '火': 0.5, '毒': 0.5, '钢': 0.5 }
+    };
+
+    function getTypeEffectiveness(attackType, targetType) {
+        if (!attackType || !targetType) return 1;
+        const chart = TYPE_CHART[attackType];
+        if (!chart) return 1;
+        return chart[targetType] || 1;
+    }
+
+    // ============================================================
+    //  4. 精灵数据库（30种，含属性）
+    // ============================================================
+    const MONSTER_DB = [
+        { name: '小火龙',   type: '火',   baseHp: 45, baseAtk: 12, baseDef: 8, baseSpd: 10, moves: ['火花', '抓'] },
+        { name: '妙蛙种子', type: '草',   baseHp: 50, baseAtk: 10, baseDef: 10, baseSpd: 8,  moves: ['藤鞭', '撞击'] },
+        { name: '杰尼龟',   type: '水',   baseHp: 48, baseAtk: 10, baseDef: 12, baseSpd: 9,  moves: ['水枪', '咬住'] },
+        { name: '皮卡丘',   type: '电',   baseHp: 40, baseAtk: 15, baseDef: 6,  baseSpd: 14, moves: ['电击', '高速移动'] },
+        { name: '六尾',     type: '火',   baseHp: 42, baseAtk: 14, baseDef: 7,  baseSpd: 13, moves: ['火焰漩涡', '撞击'] },
+        { name: '走路草',   type: '草',   baseHp: 46, baseAtk: 11, baseDef: 9,  baseSpd: 9,  moves: ['飞叶快刀', '溶解液'] },
+        { name: '可达鸭',   type: '水',   baseHp: 50, baseAtk: 9,  baseDef: 11, baseSpd: 8,  moves: ['水枪', '念力'] },
+        { name: '小拳石',   type: '岩石', baseHp: 55, baseAtk: 13, baseDef: 15, baseSpd: 5,  moves: ['落石', '撞击'] },
+        { name: '小火马',   type: '火',   baseHp: 48, baseAtk: 16, baseDef: 8,  baseSpd: 15, moves: ['火花', '践踏'] },
+        { name: '大葱鸭',   type: '飞行', baseHp: 42, baseAtk: 14, baseDef: 9,  baseSpd: 12, moves: ['啄', '连续攻击'] },
+        { name: '卡蒂狗',   type: '火',   baseHp: 50, baseAtk: 15, baseDef: 10, baseSpd: 11, moves: ['火花', '猛撞'] },
+        { name: '墨海马',   type: '水',   baseHp: 44, baseAtk: 12, baseDef: 10, baseSpd: 10, moves: ['水枪', '泡沫光线'] },
+        { name: '角金鱼',   type: '水',   baseHp: 46, baseAtk: 13, baseDef: 8,  baseSpd: 12, moves: ['冲击', '角钻'] },
+        { name: '迷你龙',   type: '龙',   baseHp: 50, baseAtk: 14, baseDef: 12, baseSpd: 11, moves: ['龙之息', '紧束'] },
+        { name: '拉鲁拉丝', type: '超能', baseHp: 38, baseAtk: 8,  baseDef: 6,  baseSpd: 13, moves: ['念力', '催眠术'] },
+        { name: '懒人翁',   type: '一般', baseHp: 52, baseAtk: 12, baseDef: 14, baseSpd: 6,  moves: ['撞击', '哈欠'] },
+        { name: '可拉可拉', type: '地面', baseHp: 48, baseAtk: 13, baseDef: 14, baseSpd: 7,  moves: ['骨头棒', '撞击'] },
+        { name: '艾比郎',   type: '格斗', baseHp: 50, baseAtk: 16, baseDef: 10, baseSpd: 9,  moves: ['连续拳', '快拳'] },
+        { name: '鸭嘴火龙', type: '火',   baseHp: 52, baseAtk: 17, baseDef: 9,  baseSpd: 12, moves: ['火焰拳', '火花'] },
+        { name: '沙奈朵',   type: '超能', baseHp: 44, baseAtk: 12, baseDef: 10, baseSpd: 14, moves: ['月亮之力', '念力'] },
+        { name: '妙蛙花',   type: '草',   baseHp: 60, baseAtk: 14, baseDef: 14, baseSpd: 8,  moves: ['阳光烈焰', '藤鞭'] },
+        { name: '水箭龟',   type: '水',   baseHp: 58, baseAtk: 13, baseDef: 16, baseSpd: 9,  moves: ['水炮', '咬住'] },
+        { name: '喷火龙',   type: '火',   baseHp: 56, baseAtk: 18, baseDef: 11, baseSpd: 14, moves: ['大字爆炎', '龙爪'] },
+        { name: '雷丘',     type: '电',   baseHp: 48, baseAtk: 16, baseDef: 9,  baseSpd: 16, moves: ['十万伏特', '电击'] },
+        { name: '九尾',     type: '火',   baseHp: 52, baseAtk: 17, baseDef: 10, baseSpd: 15, moves: ['火焰漩涡', '电光一闪'] },
+        { name: '霸王花',   type: '草',   baseHp: 55, baseAtk: 15, baseDef: 12, baseSpd: 7,  moves: ['花瓣舞', '溶解液'] },
+        { name: '哥达鸭',   type: '水',   baseHp: 54, baseAtk: 12, baseDef: 13, baseSpd: 11, moves: ['水炮', '念力'] },
+        { name: '隆隆岩',   type: '岩石', baseHp: 60, baseAtk: 16, baseDef: 18, baseSpd: 4,  moves: ['地震', '落石'] },
+        { name: '风速狗',   type: '火',   baseHp: 58, baseAtk: 19, baseDef: 12, baseSpd: 17, moves: ['神速', '火焰牙'] },
+        { name: '快龙',     type: '龙',   baseHp: 62, baseAtk: 20, baseDef: 15, baseSpd: 13, moves: ['龙之俯冲', '破坏光线'] },
+    ];
+
+    function createMonster(monId, level = 5) {
+        const data = MONSTER_DB[monId % MONSTER_DB.length];
+        const lv = level;
+        const hp = Math.floor(data.baseHp + (lv - 5) * 3 + Math.random() * 4);
+        const atk = Math.floor(data.baseAtk + (lv - 5) * 2 + Math.random() * 3);
+        const def = Math.floor(data.baseDef + (lv - 5) * 2 + Math.random() * 3);
+        const spd = Math.floor(data.baseSpd + (lv - 5) * 2 + Math.random() * 3);
+        return {
+            id: monId,
+            name: data.name,
+            type: data.type,
+            level: lv,
+            hp: hp,
+            maxHp: hp,
+            attack: atk,
+            defense: def,
+            speed: spd,
+            moves: data.moves.slice(),
+            exp: 0,
+            expToNext: Math.floor(20 + lv * 5 + Math.random() * 5),
+            currentHp: hp,
+        };
+    }
+
+    function generateWildMon(zone = 'normal') {
+        const avgLv = player.party.length > 0
+            ? Math.floor(player.party.reduce((s, m) => s + m.level, 0) / player.party.length)
+            : 5;
+        let lv = Math.min(15, Math.max(3, avgLv + Math.floor(Math.random() * 4) - 1));
+        if (zone === 'boss') lv = Math.min(20, avgLv + 6);
+        const id = Math.floor(Math.random() * MONSTER_DB.length);
+        return createMonster(id, lv);
+    }
+
+    // ============================================================
+    //  5. 剧情系统
+    // ============================================================
+    const STORY = {
+        progress: 0, // 0=序章, 1=第一任务, 2=第二任务, 3=第三任务, 4=通关
+        flags: {},
+        reset() {
+            this.progress = 0;
+            this.flags = {};
+        }
+    };
+
+    const DIALOGUES = {
+        intro: [
+            { speaker: '博士', text: '欢迎来到宝可梦世界！我是大木博士。' },
+            { speaker: '博士', text: '最近野外出现了大量野生宝可梦，我需要你的帮助。' },
+            { speaker: '博士', text: '你已拥有了一只小火龙，去草丛中冒险吧！' },
+            { speaker: '博士', text: '打败野生宝可梦可以获得经验，升级后会更强大。' },
+            { speaker: '博士', text: '记住：火系克制草系，水系克制火系，草系克制水系！' },
+            { speaker: '博士', text: '出发吧，年轻的训练家！' },
+        ],
+        task1: [
+            { speaker: '村民', text: '终于找到你了！东边的草丛出现了一只巨大的宝可梦！' },
+            { speaker: '村民', text: '它一直在骚扰我们的村庄，请你去打败它！' },
+            { speaker: '博士', text: '这是你的第一个考验，去吧！' },
+        ],
+        task1_done: [
+            { speaker: '博士', text: '干得好！你击败了那只宝可梦，村民们都安全了。' },
+            { speaker: '博士', text: '但我感应到北边有更强大的力量...' },
+        ],
+        task2: [
+            { speaker: '博士', text: '北方山脉出现了一群电系宝可梦，它们正在破坏生态系统。' },
+            { speaker: '博士', text: '带上你的精灵去调查一下吧。地面系和草系对电系有优势。' },
+        ],
+        task2_done: [
+            { speaker: '博士', text: '你平息了电系宝可梦的骚动，太棒了！' },
+            { speaker: '博士', text: '最后，西方森林的传说宝可梦正在苏醒...' },
+        ],
+        task3: [
+            { speaker: '博士', text: '西方森林深处，传说中的龙系宝可梦即将苏醒！' },
+            { speaker: '博士', text: '如果它失控，整个世界都会陷入危机！' },
+            { speaker: '博士', text: '你需要用冰系或妖精系的技能来对付它！' },
+        ],
+        final_boss: [
+            { speaker: '???', text: '人类，你终于来了...我等待了千年。' },
+            { speaker: '???', text: '我是远古龙神，让我看看你的实力！' },
+        ],
+        victory: [
+            { speaker: '博士', text: '不可思议！你击败了传说中的龙神！' },
+            { speaker: '博士', text: '你已经成为真正的宝可梦大师！' },
+            { speaker: '博士', text: '这个世界因你而和平。谢谢你，训练家！' },
+        ],
+    };
+
+    function showDialogue(dialogueKey, callback) {
+        const lines = DIALOGUES[dialogueKey];
+        if (!lines) { if (callback) callback(); return; }
+        dialogueQueue = lines.slice();
+        isDialogueActive = true;
+        gameState = 'dialogue';
+        dialogueCallback = callback || null;
+    }
+
+    function advanceDialogue() {
+        if (dialogueQueue.length > 0) {
+            dialogueQueue.shift();
+            if (dialogueQueue.length === 0) {
+                isDialogueActive = false;
+                gameState = 'overworld';
+                if (dialogueCallback) {
+                    const cb = dialogueCallback;
+                    dialogueCallback = null;
+                    cb();
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    //  6. 玩家
+    // ============================================================
+    const player = {
+        x: 400, y: 300,
+        width: 28, height: 28,
+        speed: 2.5,
+        facing: 'down',
+        party: [],
+        currentMonIndex: 0,
+        reset() {
+            this.x = 400; this.y = 300;
+            this.party = [];
+            this.party.push(createMonster(0, 5));
+            this.currentMonIndex = 0;
+            STORY.reset();
+            updateTeamUI();
+            // 开场对话
+            setTimeout(() => {
+                showDialogue('intro', () => {
+                    // 序章完成后，进入任务1
+                });
+            }, 300);
+        },
+        getCurrentMon() {
+            if (this.party.length === 0) return null;
+            return this.party[this.currentMonIndex];
+        },
+        switchMon(index) {
+            if (index >= 0 && index < this.party.length && this.party[index].currentHp > 0) {
+                this.currentMonIndex = index;
+                return true;
+            }
+            return false;
+        },
+        addMon(mon) {
+            if (this.party.length >= 3) return false;
+            this.party.push(mon);
+            updateTeamUI();
+            return true;
+        },
+        update() {
+            if (gameState !== 'overworld') return;
+            let dx = 0, dy = 0;
+            if (keys.up) dy = -1;
+            if (keys.down) dy = 1;
+            if (keys.left) dx = -1;
+            if (keys.right) dx = 1;
+            if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+            const moving = (dx !== 0 || dy !== 0);
+            if (dy < 0) this.facing = 'up';
+            else if (dy > 0) this.facing = 'down';
+            else if (dx < 0) this.facing = 'left';
+            else if (dx > 0) this.facing = 'right';
+            if (moving) {
+                let newX = this.x + dx * this.speed;
+                let newY = this.y + dy * this.speed;
+                newX = Math.max(30, Math.min(W - 30, newX));
+                newY = Math.max(30, Math.min(H - 30, newY));
+                if (!isBlocked(newX, newY)) {
+                    this.x = newX;
+                    this.y = newY;
+                    // 触发剧情区域
+                    checkStoryTriggers(this.x, this.y);
+                    if (isInGrass(this.x, this.y)) {
+                        encounterTimer++;
+                        if (encounterTimer > 40 + Math.random() * 50) {
+                            encounterTimer = 0;
+                            startBattle('normal');
+                        }
+                    } else {
+                        encounterTimer = 0;
+                    }
+                }
+            }
+        },
+        draw() {
+            const x = this.x, y = this.y;
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.shadowBlur = 8;
+            ctx.shadowOffsetY = 3;
+            ctx.fillStyle = '#f1c40f';
+            ctx.fillRect(x-12, y-14, 24, 24);
+            ctx.fillStyle = '#e67e22';
+            ctx.fillRect(x-10, y-18, 20, 8);
+            ctx.fillStyle = '#d35400';
+            ctx.fillRect(x-8, y-22, 16, 6);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x-8, y-8, 6, 6);
+            ctx.fillRect(x+2, y-8, 6, 6);
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(x-6, y-6, 3, 3);
+            ctx.fillRect(x+3, y-6, 3, 3);
+            ctx.beginPath();
+            ctx.arc(x, y-2, 5, 0.1, Math.PI-0.1);
+            ctx.strokeStyle = '#2c3e50';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#2c3e50';
+            const legOff = (frameCount % 20 < 10) ? 2 : -2;
+            ctx.fillRect(x-8, y+10, 5, 8);
+            ctx.fillRect(x+3, y+10, 5, 8);
+            ctx.fillStyle = 'rgba(0,0,0,0.15)';
+            ctx.beginPath();
+            ctx.ellipse(x, y+22, 14, 4, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+        }
+    };
+
+    // ============================================================
+    //  7. 地图碰撞 & 草丛 & 剧情触发点
+    // ============================================================
+    function isBlocked(x, y) {
+        const trees = [
+            [100, 100, 60, 60], [650, 80, 60, 60],
+            [50, 450, 60, 60], [700, 480, 60, 60],
+            [380, 120, 50, 50], [550, 450, 50, 50],
+            [200, 380, 50, 50], [600, 280, 50, 50],
+            [120, 280, 40, 40], [450, 80, 40, 40]
+        ];
+        for (let t of trees) {
+            if (x > t[0] && x < t[0]+t[2] && y > t[1] && y < t[1]+t[3]) return true;
+        }
+        const ponds = [
+            [220, 160, 70, 50], [560, 180, 60, 60],
+            [80, 80, 40, 40], [700, 50, 40, 40]
+        ];
+        for (let p of ponds) {
+            if (x > p[0] && x < p[0]+p[2] && y > p[1] && y < p[1]+p[3]) return true;
+        }
+        return false;
+    }
+
+    function isInGrass(x, y) {
+        const grassZones = [
+            [280, 200, 160, 120],
+            [460, 300, 160, 100],
+            [120, 200, 80, 80],
+            [620, 200, 80, 80],
+            [300, 400, 120, 80],
+            [150, 50, 100, 60],
+            [580, 50, 100, 60]
+        ];
+        for (let g of grassZones) {
+            if (x > g[0] && x < g[0]+g[2] && y > g[1] && y < g[1]+g[3]) return true;
+        }
+        return false;
+    }
+
+    function checkStoryTriggers(x, y) {
+        // 任务1触发：东边草丛（打败10只精灵后触发）
+        if (STORY.progress === 0 && x > 450 && x < 550 && y > 350 && y < 420) {
+            STORY.progress = 1;
+            showDialogue('task1', () => {
+                // 任务1开始
+            });
+        }
+        // 任务2触发：北边山脉（任务1完成后）
+        if (STORY.progress === 1 && x > 350 && x < 450 && y > 30 && y < 100) {
+            // 检查是否完成了任务1（通过战斗计数）
+            if (STORY.flags.task1_done) {
+                STORY.progress = 2;
+                showDialogue('task2', () => {});
+            }
+        }
+        // 任务3触发：西边森林（任务2完成后）
+        if (STORY.progress === 2 && x > 30 && x < 120 && y > 200 && y < 300) {
+            if (STORY.flags.task2_done) {
+                STORY.progress = 3;
+                showDialogue('task3', () => {});
+            }
+        }
+        // 最终Boss触发（任务3完成后，在特定区域）
+        if (STORY.progress === 3 && x > 200 && x < 280 && y > 100 && y < 180) {
+            if (STORY.flags.task3_done) {
+                STORY.progress = 4;
+                startBossBattle();
+            }
+        }
+    }
+
+    // ============================================================
+    //  8. 战斗系统
+    // ============================================================
+    let wildMon = null;
+    let battleState = null;
+    let battleZone = 'normal';
+
+    function startBattle(zone = 'normal') {
+        if (player.party.length === 0) return;
+        wildMon = generateWildMon(zone);
+        gameState = 'battle';
+        battleState = { turn: 'player', phase: 'select' };
+        battleZone = zone;
+        battleLog = [`野生 ${wildMon.name} 出现了！`];
+        for (let m of player.party) m.currentHp = m.hp;
+        player.currentMonIndex = 0;
+        // 检查是否有特殊剧情触发
+        if (zone === 'boss') {
+            battleLog.push('⚠️ 这是强大的Boss精灵！');
+        }
+    }
+
+    function startBossBattle() {
+        // 创建一个强大的Boss
+        wildMon = createMonster(29, 18); // 快龙
+        wildMon.hp = 120;
+        wildMon.maxHp = 120;
+        wildMon.attack = 25;
+        wildMon.defense = 18;
+        wildMon.currentHp = 120;
+        gameState = 'battle';
+        battleState = { turn: 'player', phase: 'select' };
+        battleZone = 'boss';
+        battleLog = ['🔥 远古龙神 · 快龙 现身了！'];
+        for (let m of player.party) m.currentHp = m.hp;
+        player.currentMonIndex = 0;
+        showDialogue('final_boss', () => {});
+    }
+
+    function playerAttack() {
+        if (gameState !== 'battle' || battleState.turn !== 'player') return;
+        const myMon = player.getCurrentMon();
+        if (!myMon) return;
+        // 属性克制计算
+        const effectiveness = getTypeEffectiveness(myMon.type, wildMon.type);
+        let dmgMultiplier = effectiveness;
+        let effectMsg = '';
+        if (dmgMultiplier >= 2) effectMsg = '✨ 效果拔群！';
+        else if (dmgMultiplier <= 0.5) effectMsg = '💧 效果不佳...';
+        else if (dmgMultiplier === 0) effectMsg = '❌ 完全无效！';
+        const atk = myMon.attack;
+        const def = wildMon.defense;
+        let baseDmg = Math.max(1, Math.floor(atk * 1.2 - def * 0.5) + Math.floor(Math.random() * 4));
+        const actualDmg = Math.min(Math.floor(baseDmg * dmgMultiplier), wildMon.currentHp);
+        wildMon.currentHp -= actualDmg;
+        battleLog.push(`${myMon.name} 使用 ${myMon.moves[0]} 攻击了 ${wildMon.name}！`);
+        if (effectMsg) battleLog.push(effectMsg);
+        battleLog.push(`造成 ${actualDmg} 点伤害！`);
+        if (wildMon.currentHp <= 0) {
+            wildMon.currentHp = 0;
+            battleLog.push(`${wildMon.name} 倒下了！`);
+            const expGain = Math.floor(15 + wildMon.level * 3);
+            myMon.exp += expGain;
+            battleLog.push(`${myMon.name} 获得 ${expGain} 经验！`);
+            while (myMon.exp >= myMon.expToNext) {
+                myMon.exp -= myMon.expToNext;
+                myMon.level++;
+                myMon.maxHp += 3;
+                myMon.hp = myMon.maxHp;
+                myMon.attack += 2;
+                myMon.defense += 2;
+                myMon.speed += 1;
+                myMon.expToNext = Math.floor(20 + myMon.level * 5);
+                battleLog.push(`✨ ${myMon.name} 升级到 ${myMon.level} 级！`);
+            }
+            for (let m of player.party) m.currentHp = m.hp;
+            // 战斗胜利后的剧情推进
+            if (battleZone === 'boss') {
+                STORY.flags.final_boss_defeated = true;
+                showDialogue('victory', () => {});
+                endBattle(true);
+            } else {
+                // 普通战斗推进剧情计数
+                if (!STORY.flags.task1_done) {
+                    STORY.flags.battleCount = (STORY.flags.battleCount || 0) + 1;
+                    if (STORY.flags.battleCount >= 3) {
+                        STORY.flags.task1_done = true;
+                        setTimeout(() => {
+                            showDialogue('task1_done', () => {});
+                        }, 500);
+                    }
+                }
+                if (STORY.progress === 1 && STORY.flags.task1_done) {
+                    // 任务1已完成，触发任务2准备
+                }
+                endBattle(true);
+            }
+            return;
+        }
+        battleState.turn = 'enemy';
+        setTimeout(enemyTurn, 600);
+    }
+
+    function playerCatch() {
+        if (gameState !== 'battle' || battleState.turn !== 'player') return;
+        if (wildMon.currentHp <= 0) { battleLog.push('野生精灵已经倒下了，无法捕捉！'); return; }
+        const myMon = player.getCurrentMon();
+        if (!myMon) return;
+        const hpRatio = wildMon.currentHp / wildMon.maxHp;
+        const baseChance = 0.3 + (1 - hpRatio) * 0.4;
+        const levelFactor = Math.max(0.1, 1 - (wildMon.level - myMon.level) * 0.05);
+        const chance = Math.min(0.9, baseChance * levelFactor);
+        const success = Math.random() < chance;
+        battleLog.push(`你投出了精灵球...`);
+        if (success) {
+            battleLog.push(`🎉 成功捕获 ${wildMon.name}！`);
+            if (player.party.length >= 3) {
+                battleLog.push(`但你的队伍已满，无法携带更多精灵！`);
+                battleLog.push(`${wildMon.name} 逃走了...`);
+                endBattle(false);
+            } else {
+                const caught = wildMon;
+                caught.currentHp = caught.hp;
+                player.party.push(caught);
+                updateTeamUI();
+                endBattle(true);
+            }
+        } else {
+            battleLog.push(`精灵球晃了晃... ${wildMon.name} 挣脱了！`);
+            battleState.turn = 'enemy';
+            setTimeout(enemyTurn, 600);
+        }
+    }
+
+    function playerRun() {
+        if (gameState !== 'battle' || battleState.turn !== 'player') return;
+        const myMon = player.getCurrentMon();
+        if (!myMon) return;
+        const chance = 0.5 + (myMon.speed - wildMon.speed) * 0.02;
+        if (Math.random() < Math.min(0.95, Math.max(0.1, chance))) {
+            battleLog.push('你成功逃跑了！');
+            endBattle(false);
+        } else {
+            battleLog.push('逃跑失败！');
+            battleState.turn = 'enemy';
+            setTimeout(enemyTurn, 600);
+        }
+    }
+
+    function enemyTurn() {
+        if (gameState !== 'battle') return;
+        const myMon = player.getCurrentMon();
+        if (!myMon || wildMon.currentHp <= 0) {
+            endBattle(false);
+            return;
+        }
+        // 敌人攻击，也计算属性克制（但敌人不会利用克制，随机）
+        const atk = wildMon.attack;
+        const def = myMon.defense;
+        const effectiveness = getTypeEffectiveness(wildMon.type, myMon.type);
+        let dmgMultiplier = Math.max(0.5, Math.min(2, effectiveness));
+        let effectMsg = '';
+        if (dmgMultiplier >= 2) effectMsg = '✨ 效果拔群！';
+        else if (dmgMultiplier <= 0.5) effectMsg = '💧 效果不佳...';
+        let baseDmg = Math.max(1, Math.floor(atk * 1.2 - def * 0.5) + Math.floor(Math.random() * 4));
+        const actualDmg = Math.min(Math.floor(baseDmg * dmgMultiplier), myMon.currentHp);
+        myMon.currentHp -= actualDmg;
+        battleLog.push(`${wildMon.name} 攻击了 ${myMon.name}！`);
+        if (effectMsg) battleLog.push(effectMsg);
+        battleLog.push(`造成 ${actualDmg} 点伤害！`);
+        if (myMon.currentHp <= 0) {
+            myMon.currentHp = 0;
+            battleLog.push(`${myMon.name} 倒下了！`);
+            let hasAlive = false;
+            for (let m of player.party) {
+                if (m.currentHp > 0) { hasAlive = true; break; }
+            }
+            if (hasAlive) {
+                for (let i=0; i<player.party.length; i++) {
+                    if (player.party[i].currentHp > 0) {
+                        player.currentMonIndex = i;
+                        battleLog.push(`派出 ${player.getCurrentMon().name}！`);
+                        break;
+                    }
+                }
+                battleState.turn = 'player';
+                battleState.phase = 'select';
+            } else {
+                battleLog.push('所有精灵都倒下了...');
+                gameOver();
+                return;
+            }
+        } else {
+            battleState.turn = 'player';
+            battleState.phase = 'select';
+        }
+    }
+
+    function endBattle(win) {
+        for (let m of player.party) m.currentHp = m.hp;
+        if (win) {
+            battleLog.push('战斗胜利！');
+        } else {
+            battleLog.push('战斗结束...');
+        }
+        gameState = 'overworld';
+        wildMon = null;
+        battleState = null;
+        encounterTimer = 0;
+    }
+
+    function gameOver() {
+        gameState = 'gameover';
+        battleLog.push('💀 你被击败了...点击"重新开始"');
+    }
+
+    // ============================================================
+    //  9. UI 更新
+    // ============================================================
+    function updateTeamUI() {
+        teamDisplay.textContent = `🐾 ${player.party.length} / 3`;
+    }
+
+    // ============================================================
+    //  10. 绘制函数
+    // ============================================================
+    function drawMap() {
+        ctx.fillStyle = '#7ec8e3';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#5f9b4b';
+        const grassZones = [
+            [280, 200, 160, 120], [460, 300, 160, 100],
+            [120, 200, 80, 80], [620, 200, 80, 80],
+            [300, 400, 120, 80], [150, 50, 100, 60],
+            [580, 50, 100, 60]
+        ];
+        for (let g of grassZones) {
+            ctx.fillRect(g[0], g[1], g[2], g[3]);
+            ctx.fillStyle = '#6ab04c';
+            for (let i=0; i<20; i++) {
+                const x = g[0] + Math.random()*g[2];
+                const y = g[1] + Math.random()*g[3];
+                ctx.fillRect(x, y, 2, 4);
+            }
+            ctx.fillStyle = '#5f9b4b';
+        }
+        ctx.strokeStyle = 'rgba(200,200,200,0.6)';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([10, 15]);
+        ctx.beginPath();
+        ctx.moveTo(0, 200);
+        ctx.lineTo(W, 200);
+        ctx.moveTo(0, 400);
+        ctx.lineTo(W, 400);
+        ctx.moveTo(300, 0);
+        ctx.lineTo(300, H);
+        ctx.moveTo(500, 0);
+        ctx.lineTo(500, H);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const trees = [
+            [100, 100, 60, 60], [650, 80, 60, 60],
+            [50, 450, 60, 60], [700, 480, 60, 60],
+            [380, 120, 50, 50], [550, 450, 50, 50],
+            [200, 380, 50, 50], [600, 280, 50, 50],
+            [120, 280, 40, 40], [450, 80, 40, 40]
+        ];
+        for (let t of trees) {
+            ctx.fillStyle = '#5d4037';
+            ctx.fillRect(t[0]+10, t[1]+10, t[2]-20, t[3]-10);
+            ctx.fillStyle = '#2e7d32';
+            ctx.beginPath();
+            ctx.arc(t[0]+t[2]/2, t[1]+10, t[2]/2-4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = '#388e3c';
+            ctx.beginPath();
+            ctx.arc(t[0]+t[2]/2-6, t[1]+6, t[2]/3, 0, Math.PI*2);
+            ctx.fill();
+        }
+        const ponds = [
+            [220, 160, 70, 50], [560, 180, 60, 60],
+            [80, 80, 40, 40], [700, 50, 40, 40]
+        ];
+        for (let p of ponds) {
+            ctx.fillStyle = '#3498db';
+            ctx.beginPath();
+            ctx.ellipse(p[0]+p[2]/2, p[1]+p[3]/2, p[2]/2, p[3]/2, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            ctx.beginPath();
+            ctx.ellipse(p[0]+p[2]/3, p[1]+p[3]/4, p[2]/4, p[3]/5, 0, 0, Math.PI*2);
+            ctx.fill();
+        }
+        // 任务标记
+        if (STORY.progress === 0) {
+            ctx.fillStyle = 'rgba(255,215,0,0.6)';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⭐ 找博士接任务 →', 500, 380);
+        }
+        if (STORY.progress === 1) {
+            ctx.fillStyle = 'rgba(255,215,0,0.6)';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⭐ 北边山脉有异常', 400, 50);
+        }
+        if (STORY.progress === 2) {
+            ctx.fillStyle = 'rgba(255,215,0,0.6)';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⭐ 西边森林深处 →', 80, 280);
+        }
+        if (STORY.progress === 3) {
+            ctx.fillStyle = 'rgba(255,0,0,0.8)';
+            ctx.font = 'bold 22px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⚡ 最终Boss就在前方！', 240, 150);
+        }
+        // 对话状态显示
+        if (gameState === 'overworld' && dialogueQueue.length > 0 && !isDialogueActive) {
+            // 正在等待对话
+        }
+    }
+
+    function drawDialogue() {
+        // 半透明遮罩
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, W, H);
+        // 对话框
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillRect(40, 420, 720, 170);
+        ctx.strokeStyle = '#f1c40f';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(40, 420, 720, 170);
+        // 当前对话
+        if (dialogueQueue.length > 0) {
+            const line = dialogueQueue[0];
+            ctx.fillStyle = '#f1c40f';
+            ctx.font = 'bold 20px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(line.speaker + '：', 60, 460);
+            ctx.fillStyle = '#ecf0f1';
+            ctx.font = '18px Arial';
+            // 自动换行
+            const text = line.text;
+            let y = 500;
+            let lineWidth = 0;
+            let words = text.split('');
+            let currentLine = '';
+            for (let i = 0; i < words.length; i++) {
+                const testLine = currentLine + words[i];
+                const metrics = ctx.measureText(testLine);
+                if (metrics.width > 640 && i > 0) {
+                    ctx.fillText(currentLine, 60, y);
+                    currentLine = words[i];
+                    y += 30;
+                } else {
+                    currentLine = testLine;
+                }
+                if (i === words.length - 1) {
+                    ctx.fillText(currentLine, 60, y);
+                }
+            }
+            ctx.fillStyle = '#95a5a6';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'right';
+            ctx.fillText('点击继续...', 720, 575);
+        }
+    }
+
+    function drawBattle() {
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillRect(0, 0, W, H);
+        // 野生精灵（右）
+        if (wildMon) {
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 22px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${wildMon.name} [${wildMon.type}] Lv.${wildMon.level}`, W-150, 70);
+            ctx.fillStyle = '#555';
+            ctx.fillRect(W-220, 90, 180, 20);
+            const hpRatio = wildMon.currentHp / wildMon.maxHp;
+            ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : '#e67e22';
+            ctx.fillRect(W-220, 90, 180 * hpRatio, 20);
+            ctx.fillStyle = 'white';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.floor(wildMon.currentHp)} / ${wildMon.maxHp}`, W-130, 106);
+            ctx.fillStyle = '#8e44ad';
+            ctx.fillRect(W-180, 130, 80, 80);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(W-160, 150, 15, 15);
+            ctx.fillRect(W-120, 150, 15, 15);
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(W-155, 155, 8, 8);
+            ctx.fillRect(W-115, 155, 8, 8);
+            // 属性标签
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(W-220, 118, 60, 18);
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(wildMon.type, W-190, 132);
+        }
+        // 我方精灵（左）
+        const myMon = player.getCurrentMon();
+        if (myMon) {
+            ctx.fillStyle = '#f1c40f';
+            ctx.font = 'bold 22px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`${myMon.name} [${myMon.type}] Lv.${myMon.level}`, 50, 70);
+            ctx.fillStyle = '#555';
+            ctx.fillRect(50, 90, 180, 20);
+            const hpRatio = myMon.currentHp / myMon.maxHp;
+            ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : '#e67e22';
+            ctx.fillRect(50, 90, 180 * hpRatio, 20);
+            ctx.fillStyle = 'white';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.floor(myMon.currentHp)} / ${myMon.maxHp}`, 140, 106);
+            ctx.fillStyle = '#e67e22';
+            ctx.fillRect(70, 130, 80, 80);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(90, 150, 15, 15);
+            ctx.fillRect(120, 150, 15, 15);
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(95, 155, 8, 8);
+            ctx.fillRect(125, 155, 8, 8);
+            ctx.fillStyle = '#e74c3c';
+            ctx.beginPath();
+            ctx.arc(115, 185, 10, 0, Math.PI);
+            ctx.fill();
+            // 属性标签
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(50, 118, 60, 18);
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(myMon.type, 80, 132);
+        }
+        // 战斗日志
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(20, 450, 760, 140);
+        ctx.fillStyle = '#ecf0f1';
+        ctx.font = '16px Arial';
+        ctx.textAlign = 'left';
+        const logLines = battleLog.slice(-6);
+        for (let i=0; i<logLines.length; i++) {
+            ctx.fillText(logLines[i], 30, 478 + i*24);
+        }
+        // 操作按钮
+        if (gameState === 'battle' && battleState && battleState.turn === 'player' && battleState.phase === 'select') {
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(20, 410, 760, 40);
+            ctx.fillStyle = 'white';
+            ctx.font = '18px Arial';
+            ctx.textAlign = 'center';
+            const actions = ['⚔️ 攻击', '🎯 捕捉', '🏃 逃跑'];
+            for (let i=0; i<3; i++) {
+                const x = 160 + i*220;
+                ctx.fillStyle = '#34495e';
+                ctx.fillRect(x-80, 415, 160, 30);
+                ctx.fillStyle = 'white';
+                ctx.fillText(actions[i], x, 438);
+            }
+        } else if (gameState === 'battle' && battleState && battleState.turn === 'enemy') {
+            ctx.fillStyle = 'rgba(255,0,0,0.3)';
+            ctx.fillRect(20, 410, 760, 40);
+            ctx.fillStyle = 'white';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('对手正在思考...', W/2, 438);
+        }
+    }
+
+    // ============================================================
+    //  11. 主绘制循环
+    // ============================================================
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+        if (gameState === 'overworld') {
+            drawMap();
+            player.draw();
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(10, 10, 200, 24);
+            ctx.fillStyle = '#f1c40f';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'left';
+            const names = player.party.map(m => m.name).join(', ');
+            ctx.fillText(`队伍: ${names || '无'}  |  进度: ${STORY.progress}`, 18, 28);
+        } else if (gameState === 'dialogue') {
+            drawMap();
+            player.draw();
+            drawDialogue();
+        } else if (gameState === 'battle') {
+            drawBattle();
+        } else if (gameState === 'gameover') {
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 64px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('💀 败北', W/2, H/2-20);
+            ctx.fillStyle = '#ecf0f1';
+            ctx.font = '28px Arial';
+            ctx.fillText('点击 "重新开始"', W/2, H/2+60);
+        }
+    }
+
+    // ============================================================
+    //  12. 输入事件
+    // ============================================================
+    document.addEventListener('keydown', (e) => {
+        const key = e.key;
+        if (key === 'ArrowUp') { keys.up = true; e.preventDefault(); }
+        if (key === 'ArrowDown') { keys.down = true; e.preventDefault(); }
+        if (key === 'ArrowLeft') { keys.left = true; e.preventDefault(); }
+        if (key === 'ArrowRight') { keys.right = true; e.preventDefault(); }
+        if (key === 'Enter' || key === ' ') {
+            e.preventDefault();
+            if (gameState === 'dialogue') {
+                advanceDialogue();
+                return;
+            }
+            if (gameState === 'battle' && battleState && battleState.turn === 'player' && battleState.phase === 'select') {
+                // 默认攻击
+                playerAttack();
+            }
+        }
+        if (gameState === 'battle' && battleState && battleState.turn === 'player' && battleState.phase === 'select') {
+            if (key === '1') playerAttack();
+            else if (key === '2') playerCatch();
+            else if (key === '3') playerRun();
+        }
+    });
+    document.addEventListener('keyup', (e) => {
+        const key = e.key;
+        if (key === 'ArrowUp') { keys.up = false; e.preventDefault(); }
+        if (key === 'ArrowDown') { keys.down = false; e.preventDefault(); }
+        if (key === 'ArrowLeft') { keys.left = false; e.preventDefault(); }
+        if (key === 'ArrowRight') { keys.right = false; e.preventDefault(); }
+    });
+
+    canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
+        if (gameState === 'dialogue') {
+            advanceDialogue();
+            return;
+        }
+        if (gameState === 'battle' && battleState && battleState.turn === 'player' && battleState.phase === 'select') {
+            if (my > 415 && my < 445) {
+                if (mx > 80 && mx < 240) playerAttack();
+                else if (mx > 300 && mx < 460) playerCatch();
+                else if (mx > 520 && mx < 680) playerRun();
+            }
+        }
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        player.reset();
+        gameState = 'overworld';
+        wildMon = null;
+        battleState = null;
+        battleLog = [];
+        encounterTimer = 0;
+        isDialogueActive = false;
+        dialogueQueue = [];
+        updateTeamUI();
+    });
+
+    // ============================================================
+    //  13. 游戏循环
+    // ============================================================
+    function gameLoop() {
+        frameCount++;
+        if (gameState === 'overworld') {
+            player.update();
+        }
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ============================================================
+    //  14. 启动
+    // ============================================================
+    player.reset();
+    gameLoop();
+
+    console.log('🐾 宝可梦冒险征程已启动！');
+    console.log('📖 包含剧情、属性克制、Boss战！');
+</script>
+</body>
+</html>
