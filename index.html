@@ -68,6 +68,7 @@
     // ---------- 3. 游戏状态变量 ----------
     let gameOver = false;
     let score = 0;
+    let hp = 100;
     let frame = 0;              // 帧计数器，用于控制障碍物生成间隔
 
     // ---------- 4. 创建小恐龙对象 ----------
@@ -257,8 +258,12 @@
             const obs = obstacles[i];
             obs.x -= obs.speed;    // 向左移动
 
+            if (checkCollision(dino, obs)) {
+                hp -= 100;
+            }
+            
             // 碰撞检测（如果还没游戏结束）
-            if (!gameOver && checkCollision(dino, obs)) {
+            if (!gameOver && hp <= 0) {
                 gameOver = true;
             }
 
@@ -268,6 +273,7 @@
                 // 安全通过一个障碍物，得分 +10
                 if (!gameOver) {
                     score += 10;
+                    hp += 50;
                     scoreSpan.textContent = score;
                 }
             }
