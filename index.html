@@ -69,6 +69,7 @@
     let gameOver = false;
     let score = 0;
     let hp = 100;
+    let hp_max = 100;
     let frame = 0;              // 帧计数器，用于控制障碍物生成间隔
 
     // ---------- 4. 创建小恐龙对象 ----------
@@ -145,6 +146,8 @@
     function resetGame() {
         gameOver = false;
         score = 0;
+        hp = 100;
+        hp_max = 100;
         frame = 0;
         obstacles = [];
         dino.y = GROUND_Y - dino.height;
@@ -259,7 +262,8 @@
             obs.x -= obs.speed;    // 向左移动
 
             if (checkCollision(dino, obs)) {
-                hp -= 100;
+                obstacles.splice(i, 1);
+                hp -= 50;
             }
             
             // 碰撞检测（如果还没游戏结束）
@@ -273,12 +277,17 @@
                 // 安全通过一个障碍物，得分 +10
                 if (!gameOver) {
                     score += 10;
-                    hp += 50;
+                    hp += 10;
+                    if (hp > hp_max) {
+                        hp = hp_max;
+                    }
                     scoreSpan.textContent = score;
                 }
             }
         }
-
+        if (score % 1000 == 0) {
+            hp_max += 100;
+        }
         // --- 5. 绘制所有元素 (按图层顺序) ---
 
         // 绘制地面（灰色条 + 小线条纹理）
@@ -307,6 +316,9 @@
         ctx.font = 'bold 16px Arial';
         ctx.textAlign = 'left';
         ctx.fillText(`🏃 ${score}`, 10, 30);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = hp > 50 ? '#2ecc71' : '#e74c3c'; // 血量高时绿色，低时红色
+        ctx.fillText(`❤️ ${hp} / ${hp_max}`, 590, 30);
 
         // --- 7. 下一帧 ---
         requestAnimationFrame(gameLoop);
