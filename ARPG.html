@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <title>⚔️ 勇者生存大作战 · 精美版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            background: #0b0e14;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        .game-wrapper {
+            background: #1a1f2b;
+            padding: 25px 30px 30px;
+            border-radius: 36px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.8);
+            border: 1px solid #3a4458;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 20px;
+            background: #2e3b4e;
+            cursor: crosshair;
+            box-shadow: inset 0 0 40px rgba(0,0,0,0.5);
+        }
+        .info-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            color: #c8d0e0;
+            font-weight: 600;
+            font-size: 15px;
+            padding: 0 8px;
+        }
+        .info-bar .stats {
+            display: flex;
+            gap: 20px;
+            background: #0f141e;
+            padding: 8px 20px;
+            border-radius: 40px;
+            border: 1px solid #2f3a4e;
+        }
+        .info-bar .stats span { color: #f1c40f; }
+        .keys-hint {
+            background: #0f141e;
+            padding: 6px 18px;
+            border-radius: 30px;
+            color: #7f8fa6;
+            font-size: 13px;
+            border: 1px solid #2f3a4e;
+            letter-spacing: 0.5px;
+        }
+        button {
+            background: #e74c3c;
+            border: none;
+            color: white;
+            font-size: 16px;
+            padding: 8px 28px;
+            border-radius: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.15s;
+            box-shadow: 0 4px 0 #a93226;
+        }
+        button:hover { background: #c0392b; transform: translateY(-2px); box-shadow: 0 6px 0 #922b21; }
+        button:active { transform: translateY(4px); box-shadow: 0 2px 0 #922b21; }
+    </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+    <canvas id="gameCanvas" width="900" height="650"></canvas>
+    <div class="info-bar">
+        <div class="stats">
+            ❤️ <span id="hpDisplay">100/100</span> &nbsp;|&nbsp; ⚔️ <span id="atkDisplay">15</span> &nbsp;|&nbsp; 🛡️ Lv.<span id="levelDisplay">1</span>
+        </div>
+        <div class="keys-hint">WASD 移动 &nbsp;·&nbsp; 空格 / 左键 攻击</div>
+        <button id="resetBtn">🔄 重来</button>
+    </div>
+</div>
+
+<script>
+    // ---------- 画布 ----------
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = 900, H = 650;
+
+    // ---------- 状态 ----------
+    let gameOver = false;
+    let monsters = [];
+    let particles = [];
+    let floatingTexts = [];
+    let frame = 0;
+    let keys = { w: false, a: false, s: false, d: false };
+    let attackPressed = false;
+
+    // ---------- UI 元素 ----------
+    const hpSpan = document.getElementById('hpDisplay');
+    const atkSpan = document.getElementById('atkDisplay');
+    const levelSpan = document.getElementById('levelDisplay');
+
+    // ---------- 玩家 ----------
+    const player = {
+        x: W/2, y: H/2,
+        radius: 28,
+        speed: 4.2,
+        hp: 100, maxHp: 100,
+        attack: 15,
+        level: 1,
+        exp: 0, expToNext: 20,
+        attackCooldown: 0,
+        attackDuration: 0,
+        facing: 1, // 1 右, -1 左
+        // 重置
+        reset() {
+            this.x = W/2; this.y = H/2;
+            this.hp = 100; this.maxHp = 100;
+            this.attack = 15;
+            this.level = 1;
+            this.exp = 0; this.expToNext = 20;
+            this.attackCooldown = 0;
+            this.attackDuration = 0;
+            this.facing = 1;
+        },
+        levelUp() {
+            this.level++;
+            this.maxHp += 25;
+            this.hp = this.maxHp;
+            this.attack += 6;
+            this.expToNext = Math.floor(this.expToNext * 1.55);
+            // 升级粒子特效（金色星尘）
+            for (let i=0; i<40; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 2 + Math.random() * 8;
+                particles.push({
+                    x: this.x, y: this.y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed - 1,
+                    life: 40, maxLife: 40,
+                    color: '#f1c40f',
+                    radius: 3 + Math.random() * 6,
+                    type: 'star'
+                });
+            }
+            // 飘字
+            floatingTexts.push({ x: this.x, y: this.y-20, text: '⬆ LEVEL UP!', color: '#f1c40f', life: 60, size: 28 });
+        },
+        attackMonsters() {
+            if (this.attackCooldown > 0) return;
+            const range = 90;
+            let hit = false;
+            for (let i=monsters.length-1; i>=0; i--) {
+                const m = monsters[i];
+                const dx = m.x - this.x, dy = m.y - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < range + m.radius) {
+                    m.hp -= this.attack;
+                    hit = true;
+                    // 受击粒子（红色喷溅）
+                    for (let j=0; j<12; j++) {
+                        const a = Math.random() * Math.PI*2;
+                        const sp = 2 + Math.random()*6;
+                        particles.push({
+                            x: m.x, y: m.y,
+                            vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - 1,
+                            life: 20, maxLife: 20,
+                            color: '#e74c3c',
+                            radius: 2 + Math.random()*4
+                        });
+                    }
+                    if (m.hp <= 0) {
+                        // 击杀
+                        const expGain = 15 + Math.floor(Math.random()*12);
+                        this.exp += expGain;
+                        floatingTexts.push({ x: m.x, y: m.y-10, text: `+${expGain} EXP`, color: '#2ecc71', life: 50, size: 20 });
+                        monsters.splice(i, 1);
+                        // 击杀特效（爆炸）
+                        for (let j=0; j<25; j++) {
+                            const a = Math.random() * Math.PI*2;
+                            const sp = 2 + Math.random()*8;
+                            particles.push({
+                                x: m.x, y: m.y,
+                                vx: Math.cos(a)*sp, vy: Math.sin(a)*sp - 2,
+                                life: 30, maxLife: 30,
+                                color: '#f39c12',
+                                radius: 3 + Math.random()*5
+                            });
+                        }
+                        // 检查升级
+                        while (this.exp >= this.expToNext) {
+                            this.exp -= this.expToNext;
+                            this.levelUp();
+                        }
+                    }
+                }
+            }
+            if (hit) {
+                this.attackCooldown = 22;
+                this.attackDuration = 14;
+                // 攻击挥砍特效（半月弧）
+                particles.push({
+                    x: this.x + this.facing * 40, y: this.y,
+                    vx: 0, vy: 0,
+                    life: 14, maxLife: 14,
+                    color: 'rgba(255,255,255,0.8)',
+                    radius: 30,
+                    type: 'slash'
+                });
+            }
+        },
+        update() {
+            let dx=0, dy=0;
+            if (keys.w) dy = -1;
+            if (keys.s) dy = 1;
+            if (keys.a) dx = -1;
+            if (keys.d) dx = 1;
+            if (dx!==0 && dy!==0) { dx*=0.707; dy*=0.707; }
+            if (dx!==0) this.facing = dx > 0 ? 1 : -1;
+            this.x += dx * this.speed;
+            this.y += dy * this.speed;
+            this.x = Math.max(this.radius, Math.min(W-this.radius, this.x));
+            this.y = Math.max(this.radius+10, Math.min(H-this.radius-10, this.y));
+            if (this.attackCooldown > 0) this.attackCooldown--;
+            if (this.attackDuration > 0) this.attackDuration--;
+            // 攻击按键触发
+            if (attackPressed && !gameOver) {
+                this.attackMonsters();
+                attackPressed = false;
+            }
+        },
+        draw() {
+            // ---- 绘制勇者 ----
+            const x = this.x, y = this.y, r = this.radius;
+            // 阴影
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 25;
+            ctx.shadowOffsetY = 6;
+
+            // 披风（斗篷）
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.fillStyle = '#8e44ad';
+            ctx.beginPath();
+            ctx.moveTo(x - r*0.6, y + 2);
+            ctx.quadraticCurveTo(x - r*1.4, y + r*0.7, x - r*0.8, y + r*1.1);
+            ctx.quadraticCurveTo(x - r*0.3, y + r*0.9, x - r*0.2, y + r*0.5);
+            ctx.fill();
+            ctx.fillStyle = '#9b59b6';
+            ctx.beginPath();
+            ctx.moveTo(x + r*0.6, y + 2);
+            ctx.quadraticCurveTo(x + r*1.4, y + r*0.7, x + r*0.8, y + r*1.1);
+            ctx.quadraticCurveTo(x + r*0.3, y + r*0.9, x + r*0.2, y + r*0.5);
+            ctx.fill();
+
+            // 身体（铠甲）
+            const grad = ctx.createRadialGradient(x-6, y-8, 5, x, y, r);
+            grad.addColorStop(0, '#3498db');
+            grad.addColorStop(0.7, '#2980b9');
+            grad.addColorStop(1, '#1f618d');
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#3498db';
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI*2);
+            ctx.fill();
+            ctx.strokeStyle = '#1a5276';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // 胸部高光
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.beginPath();
+            ctx.ellipse(x-6, y-8, 10, 8, -0.3, 0, Math.PI*2);
+            ctx.fill();
+
+            // 腰带
+            ctx.fillStyle = '#d4ac0d';
+            ctx.fillRect(x-18, y+6, 36, 6);
+            ctx.fillStyle = '#f1c40f';
+            ctx.fillRect(x-14, y+7, 28, 4);
+
+            // 剑（根据朝向）
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ecf0f1';
+            ctx.save();
+            const swordLen = 32;
+            const tipX = x + this.facing * (r + swordLen);
+            const tipY = y - 6;
+            ctx.translate(x + this.facing * 12, y - 10);
+            ctx.rotate(this.facing * 0.4);
+            // 剑身
+            ctx.fillStyle = '#bdc3c7';
+            ctx.shadowColor = '#f5f6fa';
+            ctx.shadowBlur = 18;
+            ctx.fillRect(0, -3, swordLen, 6);
+            // 剑格
+            ctx.fillStyle = '#f1c40f';
+            ctx.fillRect(-4, -8, 6, 16);
+            // 剑尖
+            ctx.fillStyle = '#ecf0f1';
+            ctx.beginPath();
+            ctx.moveTo(swordLen, -5);
+            ctx.lineTo(swordLen+6, 0);
+            ctx.lineTo(swordLen, 5);
+            ctx.fill();
+            ctx.restore();
+
+            // 头部（头盔）
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.fillStyle = '#7f8c8d';
+            ctx.beginPath();
+            ctx.arc(x, y-6, r*0.7, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = '#95a5a6';
+            ctx.beginPath();
+            ctx.arc(x, y-8, r*0.55, 0, Math.PI*2);
+            ctx.fill();
+
+            // 面罩缝隙（眼睛）
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(x-8, y-12, 16, 4);
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(x-5, y-10, 3.5, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x+5, y-10, 3.5, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = '#1a252f';
+            ctx.beginPath();
+            ctx.arc(x-6, y-9, 2, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x+4, y-9, 2, 0, Math.PI*2);
+            ctx.fill();
+
+            // 嘴（微笑）
+            ctx.beginPath();
+            ctx.arc(x, y-2, 8, 0.1, Math.PI-0.1);
+            ctx.strokeStyle = '#2c3e50';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 等级标签
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.font = 'bold 15px "Segoe UI", Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Lv.${this.level}`, x, y - r - 16);
+
+            // 攻击特效（挥砍弧线）
+            if (this.attackDuration > 0) {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(this.facing * 0.8);
+                ctx.shadowBlur = 30;
+                ctx.shadowColor = 'rgba(241,196,15,0.6)';
+                ctx.strokeStyle = 'rgba(241,196,15,0.8)';
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.arc(0, 0, 70, -0.8, 0.8);
+                ctx.stroke();
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(0, 0, 60, -0.6, 0.6);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // 重置阴影
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+        }
+    };
+
+    // ---------- 怪物 ----------
+    function spawnMonster() {
+        const side = Math.floor(Math.random()*4);
+        let x, y;
+        const pad = 50;
+        if (side===0) { x = Math.random()*W; y = -pad; }
+        else if (side===1) { x = W+pad; y = Math.random()*H; }
+        else if (side===2) { x = Math.random()*W; y = H+pad; }
+        else { x = -pad; y = Math.random()*H; }
+
+        const baseHp = 30 + player.level * 4;
+        const baseSpeed = 1.0 + player.level * 0.12;
+        monsters.push({
+            x, y,
+            radius: 20 + Math.random()*10,
+            hp: baseHp,
+            maxHp: baseHp,
+            speed: Math.min(baseSpeed, 3.8),
+            damage: 8 + player.level * 2,
+            color: `hsl(${Math.random()*30+340}, 75%, 55%)`,
+            eyeColor: `hsl(${Math.random()*60+40}, 80%, 60%)`,
+            type: Math.floor(Math.random()*3) // 0-2 不同外形
+        });
+    }
+
+    function updateMonsters() {
+        for (let i=monsters.length-1; i>=0; i--) {
+            const m = monsters[i];
+            const dx = player.x - m.x, dy = player.y - m.y;
+            const dist = Math.sqrt(dx*dx+dy*dy);
+            if (dist > 1) {
+                const move = Math.min(m.speed, dist);
+                m.x += (dx/dist) * move;
+                m.y += (dy/dist) * move;
+            }
+            // 碰撞玩家
+            const d = Math.sqrt((player.x-m.x)**2 + (player.y-m.y)**2);
+            if (d < player.radius + m.radius) {
+                player.hp -= m.damage * 0.25;
+                // 击退
+                const angle = Math.atan2(m.y-player.y, m.x-player.x);
+                m.x += Math.cos(angle)*20;
+                m.y += Math.sin(angle)*20;
+                // 受伤粒子
+                for (let j=0; j<8; j++) {
+                    particles.push({
+                        x: player.x, y: player.y,
+                        vx: (Math.random()-0.5)*8,
+                        vy: (Math.random()-0.5)*8 - 2,
+                        life: 15, maxLife: 15,
+                        color: 'white',
+                        radius: 3+Math.random()*5
+                    });
+                }
+                if (player.hp <= 0) { player.hp=0; gameOver=true; }
+            }
+        }
+    }
+
+    function drawMonsters() {
+        for (let m of monsters) {
+            const x=m.x, y=m.y, r=m.radius;
+            // 阴影
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.shadowBlur = 18;
+            ctx.shadowOffsetY = 4;
+            // 身体（不同形状）
+            ctx.fillStyle = m.color;
+            if (m.type === 0) {
+                // 圆球怪物
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI*2);
+                ctx.fill();
+                // 嘴巴
+                ctx.fillStyle = '#2c3e50';
+                ctx.beginPath();
+                ctx.arc(x+2, y+6, 8, 0, Math.PI);
+                ctx.fill();
+                // 眼睛
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(x-6, y-4, 6, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x+6, y-4, 6, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#1a252f';
+                ctx.beginPath();
+                ctx.arc(x-8, y-2, 3, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x+4, y-2, 3, 0, Math.PI*2);
+                ctx.fill();
+            } else if (m.type === 1) {
+                // 方形怪物（带角）
+                ctx.fillRect(x-r, y-r, r*2, r*2);
+                ctx.fillStyle = '#c0392b';
+                ctx.beginPath();
+                ctx.moveTo(x-r*0.7, y-r);
+                ctx.lineTo(x, y-r*1.5);
+                ctx.lineTo(x+r*0.7, y-r);
+                ctx.fill();
+                // 眼睛
+                ctx.fillStyle = 'white';
+                ctx.fillRect(x-10, y-6, 8, 8);
+                ctx.fillRect(x+2, y-6, 8, 8);
+                ctx.fillStyle = '#2c3e50';
+                ctx.fillRect(x-6, y-4, 4, 4);
+                ctx.fillRect(x+6, y-4, 4, 4);
+                // 嘴（锯齿）
+                ctx.fillStyle = '#2c3e50';
+                for (let k=0; k<4; k++) {
+                    ctx.fillRect(x-12 + k*8, y+6, 4, 4);
+                }
+            } else {
+                // 蜘蛛/多足
+                ctx.beginPath();
+                ctx.arc(x, y, r*0.8, 0, Math.PI*2);
+                ctx.fill();
+                for (let k=0; k<8; k++) {
+                    const ang = k/8*Math.PI*2 + frame*0.02;
+                    ctx.fillStyle = m.color;
+                    ctx.fillRect(x + Math.cos(ang)*r*1.2 - 4, y + Math.sin(ang)*r*1.2 - 2, 8, 4);
+                }
+                ctx.fillStyle = '#2c3e50';
+                ctx.beginPath();
+                ctx.arc(x-5, y-4, 5, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x+5, y-4, 5, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#e74c3c';
+                ctx.beginPath();
+                ctx.arc(x, y+8, 6, 0, Math.PI);
+                ctx.fill();
+            }
+            // 血条
+            ctx.shadowBlur = 0;
+            const barW = r*1.6;
+            const barH = 5;
+            const barX = x - barW/2;
+            const barY = y - r - 12;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(barX-1, barY-1, barW+2, barH+2);
+            ctx.fillStyle = '#e74c3c';
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = '#2ecc71';
+            const hpPercent = m.hp / m.maxHp;
+            ctx.fillRect(barX, barY, barW * hpPercent, barH);
+            // 重置阴影
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+        }
+    }
+
+    // ---------- 粒子系统 ----------
+    function updateParticles() {
+        for (let i=particles.length-1; i>=0; i--) {
+            const p = particles[i];
+            p.x += p.vx || 0;
+            p.y += p.vy || 0;
+            p.life--;
+            if (p.life <= 0) { particles.splice(i,1); continue; }
+            // 特殊类型 slash
+            if (p.type === 'slash') {
+                p.radius += 0.8;
+            }
+        }
+    }
+
+    function drawParticles() {
+        for (let p of particles) {
+            const alpha = p.life / p.maxLife;
+            if (p.type === 'slash') {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.globalAlpha = alpha * 0.7;
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = 5;
+                ctx.beginPath();
+                ctx.arc(0, 0, p.radius, -0.9, 0.9);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.restore();
+                continue;
+            }
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = p.color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.radius * alpha, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // ---------- 浮动文字 ----------
+    function updateFloatingTexts() {
+        for (let i=floatingTexts.length-1; i>=0; i--) {
+            const ft = floatingTexts[i];
+            ft.y -= 1.2;
+            ft.life--;
+            if (ft.life <= 0) floatingTexts.splice(i,1);
+        }
+    }
+
+    function drawFloatingTexts() {
+        for (let ft of floatingTexts) {
+            ctx.globalAlpha = ft.life / 40;
+            ctx.fillStyle = ft.color;
+            ctx.font = `bold ${ft.size}px "Segoe UI", Arial`;
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 8;
+            ctx.fillText(ft.text, ft.x, ft.y);
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // ---------- 背景 ----------
+    function drawBackground() {
+        // 地面网格
+        ctx.fillStyle = '#2e3b4e';
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 1;
+        for (let i=0; i<W; i+=40) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0);
+            ctx.lineTo(i, H);
+            ctx.stroke();
+        }
+        for (let i=0; i<H; i+=40) {
+            ctx.beginPath();
+            ctx.moveTo(0, i);
+            ctx.lineTo(W, i);
+            ctx.stroke();
+        }
+        // 装饰小点（星光）
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        for (let i=0; i<30; i++) {
+            const x = (i*37 + 13) % W;
+            const y = (i*53 + 7) % H;
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+
+    // ---------- UI 更新 ----------
+    function updateUI() {
+        hpSpan.textContent = `${Math.floor(player.hp)}/${player.maxHp}`;
+        atkSpan.textContent = player.attack;
+        levelSpan.textContent = player.level;
+    }
+
+    // ---------- 重置 ----------
+    function resetGame() {
+        gameOver = false;
+        monsters = [];
+        particles = [];
+        floatingTexts = [];
+        frame = 0;
+        player.reset();
+        // 初始生成几个怪物
+        for (let i=0; i<4; i++) spawnMonster();
+        updateUI();
+    }
+
+    // ---------- 输入事件 ----------
+    document.addEventListener('keydown', (e) => {
+        const key = e.key.toLowerCase();
+        if (key === 'w' || key === 'a' || key === 's' || key === 'd') {
+            e.preventDefault();
+            keys[key] = true;
+        }
+        if (e.key === ' ' || e.key === 'Space') {
+            e.preventDefault();
+            if (gameOver) { resetGame(); return; }
+            attackPressed = true;
+        }
+    });
+    document.addEventListener('keyup', (e) => {
+        const key = e.key.toLowerCase();
+        if (key === 'w' || key === 'a' || key === 's' || key === 'd') {
+            e.preventDefault();
+            keys[key] = false;
+        }
+    });
+    canvas.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        if (gameOver) { resetGame(); return; }
+        attackPressed = true;
+    });
+    // 防止右键菜单
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    document.getElementById('resetBtn').addEventListener('click', resetGame);
+
+    // ---------- 主循环 ----------
+    function gameLoop() {
+        frame++;
+        // 更新
+        if (!gameOver) {
+            player.update();
+            updateMonsters();
+            // 生成怪物
+            if (frame % 120 === 0 && monsters.length < 8) spawnMonster();
+            // 玩家被怪物杀死检测（已在updateMonsters中处理）
+            if (player.hp <= 0) { gameOver = true; }
+            updateUI();
+        }
+        updateParticles();
+        updateFloatingTexts();
+
+        // ----- 绘制 -----
+        drawBackground();
+
+        // 怪物
+        drawMonsters();
+
+        // 粒子
+        drawParticles();
+
+        // 玩家
+        player.draw();
+
+        // 浮动文字
+        drawFloatingTexts();
+
+        // 游戏结束蒙层
+        if (gameOver) {
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = '#e74c3c';
+            ctx.font = 'bold 64px "Segoe UI", Arial';
+            ctx.textAlign = 'center';
+            ctx.shadowColor = '#c0392b';
+            ctx.shadowBlur = 30;
+            ctx.fillText('💀 败北', W/2, H/2-30);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#bdc3c7';
+            ctx.font = '28px "Segoe UI", Arial';
+            ctx.fillText('点击 空格 / 左键 重新挑战', W/2, H/2+60);
+        }
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ---------- 启动 ----------
+    resetGame();
+    gameLoop();
+</script>
+</body>
+</html>
